@@ -1,2 +1,1 @@
-web: gunicorn acme.wsgi
-worker: celery -A acme worker -l info
+web: honcho -f Procfile.web start
