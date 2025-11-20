@@ -4,7 +4,10 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: honcho -f Procfile.web start
+    startCommand: |
+      python manage.py migrate && \
+      python manage.py collectstatic --noinput && \
+      honcho -f Procfile.web start
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -12,12 +15,12 @@ services:
           property: connectionString
       - key: REDIS_URL
         fromService:
-          name: acme-redis
+          name: acme-redis-6ui8      # IMPORTANT: must match your Redis name
           type: redis
           property: connectionString
 
   - type: redis
-    name: acme-redis
+    name: acme-redis-6ui8             # IMPORTANT: must match your Redis name
     plan: free
     ipAllowList:
       - source: 0.0.0.0/0
