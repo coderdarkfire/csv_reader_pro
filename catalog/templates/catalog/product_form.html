@@ -1,0 +1,25 @@
+{% extends "catalog/base.html" %}
+{% block title %}Product Form{% endblock %}
+
+{% block content %}
+<h2>{{ product|default:"Create Product" }}</h2>
+
+<form method="post">
+    {% csrf_token %}
+    
+    <label>SKU:</label><br>
+    <input type="text" name="sku" value="{{ product.sku|default:'' }}" required><br><br>
+
+    <label>Name:</label><br>
+    <input type="text" name="name" value="{{ product.name|default:'' }}" required><br><br>
+
+    <label>Description:</label><br>
+    <textarea name="description">{{ product.description|default:'' }}</textarea><br><br>
+
+    <label>Active:</label>
+    <input type="checkbox" name="active" {% if product.active %}checked{% endif %}><br><br>
+
+    <button class="btn btn-primary" type="submit">Save</button>
+    <a href="{% url 'catalog:product_list' %}" class="btn">Cancel</a>
+</form>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "catalog/base.html" %}
+
+{% block title %}Upload Progress{% endblock %}
+
+{% block content %}
+<h2>Upload Progress</h2>
+
+<p>Job ID: <code>{{ job.id }}</code></p>
+
+<div class="progress-bar-container">
+    <div class="progress-bar-fill" id="progressFill"></div>
+</div>
+<div class="status-message" id="statusMessage">
+    Status: {{ job.status }} — {{ job.message }}
+</div>
+<div id="errorMessage" class="error"></div>
+
+<br>
+<a href="{% url 'catalog:upload' %}" class="btn">Upload another file</a>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const jobId = "{{ job.id }}";
+    const statusUrl = "{% url 'catalog:upload_status_api' job.id %}";
+
+    function pollStatus() {
+        fetch(statusUrl)
+            .then(response => response.json())
+            .then(data => {
+                const fill = document.getElementById('progressFill');
+                const statusMessage = document.getElementById('statusMessage');
+                const errorMessage = document.getElementById('errorMessage');
+
+                fill.style.width = data.progress + '%';
+                statusMessage.textContent = "Status: " + data.status + " — " + (data.message || '');
+
+                if (data.error) {
+                    errorMessage.textContent = "Error: " + data.error;
+                }
+
+                if (data.status === 'completed' || data.status === 'failed') {
+                    // stop polling
+                    return;
+                }
+
+                setTimeout(pollStatus, 1000);
+            })
+            .catch(err => {
+                console.error(err);
+                setTimeout(pollStatus, 2000);
+            });
+    }
+
+    // Start polling
+    pollStatus();
+</script>
+{% endblock %}
