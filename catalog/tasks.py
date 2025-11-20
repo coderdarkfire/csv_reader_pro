@@ -1,141 +1,114 @@
 import csv
 from uuid import UUID
-from pathlib import Path
 from celery import shared_task
 from django.db import transaction
-from .models import Product, UploadJob
+from django.db import connection
+from catalog.models import Product, UploadJob
 
 
-BATCH_SIZE = 5000   # optimal for PostgreSQL
+BATCH_SIZE = 5000  # safe for 512MB RAM
 
 
 @shared_task
 def process_product_csv(job_id, file_path):
     job = UploadJob.objects.get(id=UUID(job_id))
-    job.status = "processing"
-    job.progress = 0
-    job.message = "Starting import..."
-    job.save()
+    job.status = "PROCESSING"
+    job.save(update_fields=["status"])
 
-    path = Path(file_path)
-    if not path.exists():
-        job.status = "failed"
-        job.error = f"File not found: {file_path}"
-        job.save()
-        return
+    total_rows = count_csv_rows(file_path)
+    job.total_rows = total_rows
+    job.save(update_fields=["total_rows"])
+
+    processed = 0
 
     try:
-        # ------------------------
-        # 1. Load all existing SKUs once (case-insensitive)
-        # ------------------------
-        job.message = "Loading existing products..."
-        job.save()
+        with open(file_path, newline='', encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
 
-        existing_products = Product.objects.all().values("id", "sku")
-        existing_map = {p["sku"].lower(): p["id"] for p in existing_products}
+            batch = []
+            for row in reader:
+                batch.append(row)
 
-        total_existing = len(existing_map)
+                # When batch full → process it
+                if len(batch) >= BATCH_SIZE:
+                    processed += save_batch(batch)
+                    batch = []
+                    update_progress(job, processed, total_rows)
 
-        # ------------------------
-        # 2. Prepare bulk buffers
-        # ------------------------
-        to_create = []
-        to_update = []
+            # Process leftover rows
+            if batch:
+                processed += save_batch(batch)
+                update_progress(job, processed, total_rows)
 
-        processed = 0
-
-        # ------------------------
-        # 3. Stream CSV once
-        # ------------------------
-        with path.open("r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-
-        total_rows = len(rows)
-        if total_rows == 0:
-            job.status = "failed"
-            job.error = "CSV file is empty."
-            job.save()
-            return
-
-        # ------------------------
-        # 4. Process rows in memory
-        # ------------------------
-        for row in rows:
-            sku_raw = (row.get("sku") or "").strip()
-            if not sku_raw:
-                continue
-
-            name = (row.get("name") or "").strip()
-            description = (row.get("description") or "").strip()
-
-            sku_key = sku_raw.lower()
-
-            if sku_key in existing_map:
-                # Existing → prepare update
-                to_update.append(
-                    Product(
-                        id=existing_map[sku_key],
-                        sku=sku_raw,
-                        name=name,
-                        description=description,
-                        active=True,
-                    )
-                )
-            else:
-                # New product → prepare create
-                to_create.append(
-                    Product(
-                        sku=sku_raw,
-                        name=name,
-                        description=description,
-                        active=True,
-                    )
-                )
-
-            processed += 1
-
-            # ------------------------
-            # Batch commit + progress
-            # ------------------------
-            if processed % BATCH_SIZE == 0:
-                _bulk_apply(to_create, to_update)
-                to_create = []
-                to_update = []
-
-                progress = int((processed / total_rows) * 100)
-                job.progress = progress
-                job.message = f"Processed {processed}/{total_rows} rows..."
-                job.save()
-
-        # ------------------------
-        # 5. Final batch commit
-        # ------------------------
-        _bulk_apply(to_create, to_update)
-
-        job.status = "completed"
+        job.status = "COMPLETED"
         job.progress = 100
-        job.message = (
-            f"Import complete. {processed} rows processed. "
-            f"{len(to_create)} new, {len(to_update)} updated."
-        )
-        job.save()
+        job.save(update_fields=["status", "progress"])
 
     except Exception as e:
-        job.status = "failed"
-        job.error = str(e)
-        job.save()
+        job.status = "FAILED"
+        job.error_message = str(e)
+        job.save(update_fields=["status", "error_message"])
+        raise
 
 
-def _bulk_apply(to_create, to_update):
+def count_csv_rows(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        return sum(1 for _ in f) - 1  # minus header
+
+
+def update_progress(job, processed, total):
+    progress = int((processed / total) * 100)
+    UploadJob.objects.filter(id=job.id).update(progress=progress)
+
+
+def save_batch(batch_rows):
     """
-    Helper to apply bulk inserts and updates efficiently.
+    Efficient, low-RAM batch save:
+    - Convert SKU to lowercase (case-insensitive overwrite)
+    - Use bulk UPSERT with PostgreSQL ON CONFLICT
+    - Only stores a few thousand rows in memory max
     """
-    if to_create:
-        Product.objects.bulk_create(to_create, ignore_conflicts=True)
 
-    if to_update:
-        # bulk_update requires a list of fields
-        Product.objects.bulk_update(
-            to_update, ["name", "description", "active"]
+    products = []
+    for row in batch_rows:
+        products.append(Product(
+            sku=row["sku"].strip().lower(),
+            name=row.get("name", ""),
+            description=row.get("description", ""),
+            active=True
+        ))
+
+    # BULK UPSERT (overwrite by SKU)
+    # Requires PostgreSQL & unique constraint on sku
+    with connection.cursor() as cursor:
+        cursor.execute("""
+            CREATE TEMP TABLE tmp_products (
+                sku TEXT,
+                name TEXT,
+                description TEXT,
+                active BOOLEAN
+            ) ON COMMIT DROP;
+        """)
+
+        # Insert rows into temp table
+        args_str = ",".join(
+            cursor.mogrify("(%s,%s,%s,%s)", (
+                p.sku, p.name, p.description, p.active
+            )).decode("utf-8")
+            for p in products
         )
+
+        cursor.execute("INSERT INTO tmp_products VALUES " + args_str)
+
+        # Upsert from temp table with ON CONFLICT
+        cursor.execute("""
+            INSERT INTO catalog_product (sku, name, description, active)
+            SELECT sku, name, description, active FROM tmp_products
+            ON CONFLICT (sku)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                description = EXCLUDED.description,
+                active = EXCLUDED.active;
+        """)
+
+    return len(batch_rows)
