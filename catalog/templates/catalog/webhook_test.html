@@ -1,0 +1,38 @@
+{% extends "catalog/base.html" %}
+{% block content %}
+
+<h2>Testing Webhook</h2>
+<p>Webhook: <strong>{{ webhook.url }}</strong></p>
+
+<div id="status">Testing...</div>
+
+<script>
+const taskId = "{{ task_id }}";
+
+function poll() {
+    fetch(`/webhooks/test-status/${taskId}/`)
+        .then(r => r.json())
+        .then(data => {
+            if (data.ready) {
+                const result = data.result;
+
+                if (result.error) {
+                    document.getElementById("status").innerHTML =
+                        "<b>Failed:</b> " + result.error;
+                } else {
+                    document.getElementById("status").innerHTML = `
+                        <b>Status:</b> ${result.status}<br>
+                        <b>Response Time:</b> ${result.response_time}s<br>
+                        <b>Body:</b><br><pre>${result.body}</pre>
+                    `;
+                }
+            } else {
+                setTimeout(poll, 1000);
+            }
+        });
+}
+
+poll();
+</script>
+
+{% endblock %}

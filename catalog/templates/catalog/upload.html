@@ -1,0 +1,21 @@
+{% extends "catalog/base.html" %}
+
+{% block title %}Upload Products CSV{% endblock %}
+
+{% block content %}
+<h2>Upload Products CSV</h2>
+<p>Upload a CSV file with columns: <code>sku, name, description</code>.</p>
+
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <div>
+        <input type="file" name="file" accept=".csv" required>
+    </div>
+    <br>
+    <button type="submit" class="btn btn-primary">Upload</button>
+</form>
+
+{% if error %}
+    <div class="error">{{ error }}</div>
+{% endif %}
+{% endblock %}
