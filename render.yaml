@@ -29,12 +29,12 @@ services:
         fromService:
           name: acme-redis
           type: redis
+    plan: free
+
+  - type: redis
+    name: acme-redis
+    plan: free
 
 databases:
   - name: acme-db
-    plan: free
-
-services:
-  - type: redis
-    name: acme-redis
     plan: free
