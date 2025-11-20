@@ -4,6 +4,7 @@ from . import views
 app_name = 'catalog'
 
 urlpatterns = [
+    path('/', views.upload_products_view, name='upload'),
     path('upload/', views.upload_products_view, name='upload'),
     path('upload/<uuid:job_id>/', views.upload_progress_view, name='upload_progress'),
     path('upload-status/<uuid:job_id>/', views.upload_status_api, name='upload_status_api'),
